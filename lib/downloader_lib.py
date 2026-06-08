@@ -133,8 +133,13 @@ def parse_projects(results_data, keyword, filter_info):
                 "id": item[0],
                 "name": item[1],
                 "approvalNo": item[2] if len(item) > 2 else "",
+                "applicationCode": "",
                 "projectType": item[3] if len(item) > 3 else "",
+                "personInCharge": "",
                 "unit": item[4] if len(item) > 4 else "",
+                "fundAmount": "",
+                "approvalYear": "",
+                "conclusionYear": "",
                 "keyword": keyword,
                 "filter_info": filter_info,
             })
@@ -143,7 +148,14 @@ def parse_projects(results_data, keyword, filter_info):
 
 # ── Task list management ──────────────────────────────────────────────────────
 
-TASK_FIELDNAMES = ["id", "name", "keyword", "approvalNo", "status", "error", "updated_at", "filter_info"]
+TASK_FIELDNAMES = [
+    "id", "name", "keyword", "approvalNo", "applicationCode",
+    "projectType", "personInCharge", "unit", "fundAmount",
+    "approvalYear", "conclusionYear",
+    "status", "error", "updated_at", "filter_info",
+]
+
+TASK_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "task_list.csv")
 
 
 def load_task_list(filepath):
@@ -155,10 +167,11 @@ def load_task_list(filepath):
 
 def save_task_list(tasks, filepath):
     with open(filepath, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=TASK_FIELDNAMES)
+        writer = csv.DictWriter(f, fieldnames=TASK_FIELDNAMES, extrasaction="ignore")
         writer.writeheader()
         for t in tasks:
-            writer.writerow(t)
+            row = {k: t.get(k, "") for k in TASK_FIELDNAMES}
+            writer.writerow(row)
 
 
 def merge_tasks(existing, new_projects):
@@ -171,6 +184,13 @@ def merge_tasks(existing, new_projects):
                 "name": proj["name"],
                 "keyword": proj["keyword"],
                 "approvalNo": proj.get("approvalNo", ""),
+                "applicationCode": proj.get("applicationCode", ""),
+                "projectType": proj.get("projectType", ""),
+                "personInCharge": proj.get("personInCharge", ""),
+                "unit": proj.get("unit", ""),
+                "fundAmount": proj.get("fundAmount", ""),
+                "approvalYear": proj.get("approvalYear", ""),
+                "conclusionYear": proj.get("conclusionYear", ""),
                 "status": "pending",
                 "error": "",
                 "updated_at": datetime.now().isoformat(),
@@ -179,6 +199,82 @@ def merge_tasks(existing, new_projects):
             existing_ids.add(proj["id"])
             count += 1
     return existing, count
+
+
+# ── Task enrichment ───────────────────────────────────────────────────────────
+
+# Known API field name variants for each target field
+_FIELD_MAP = {
+    "applicationCode": ["applicationCode", "applyCode", "grantCode"],
+    "personInCharge": ["personInCharge", "leaderName", "leader", "piName", "personName"],
+    "fundAmount": ["totalAmount", "fundAmount", "approvedAmount", "amount"],
+    "approvalYear": ["approvalYear", "approveYear", "startYear"],
+    "conclusionYear": ["conclusionYear", "endYear", "finishYear", "concludeYear"],
+}
+
+
+def enrich_task(session, task):
+    """Fetch project detail from API and fill missing metadata fields.
+
+    Calls conclusionProjectInfo API, extracts: applicationCode, personInCharge,
+    fundAmount, approvalYear, conclusionYear. No-op if all fields already filled.
+    """
+    fields_needed = [f for f in _FIELD_MAP if not task.get(f)]
+    if not fields_needed:
+        return task  # Already enriched
+
+    import requests, time
+
+    for attempt in range(3):
+        try:
+            resp = session.post(
+                f"{NSFC_HOST}/api/baseQuery/conclusionProjectInfo/{task['id']}",
+                timeout=15)
+            if resp.status_code == 503:
+                time.sleep(5 * (attempt + 1))
+                continue
+            if resp.status_code != 200 or not resp.text.strip():
+                return task
+            info = resp.json().get("data", {})
+            break
+        except Exception:
+            time.sleep(3)
+    else:
+        return task  # All retries failed
+
+    if not info or not isinstance(info, dict):
+        return task
+
+    for target, candidates in _FIELD_MAP.items():
+        for key in candidates:
+            val = info.get(key)
+            if val is not None and val != "" and not task.get(target):
+                task[target] = str(val)
+                break
+
+    # Also update name from API if the search result name was truncated
+    api_name = info.get("projectName")
+    if api_name and len(api_name) > len(task.get("name", "")):
+        task["name"] = api_name
+
+    return task
+
+
+def enrich_tasks(session, tasks, delay=1.0):
+    """Enrich a list of tasks with API-sourced metadata fields."""
+    import time
+    enriched = 0
+    for i, task in enumerate(tasks):
+        before = {f: task.get(f, "") for f in _FIELD_MAP}
+        enrich_task(session, task)
+        after = {f: task.get(f, "") for f in _FIELD_MAP}
+        if any(not before.get(f) and after.get(f) for f in _FIELD_MAP):
+            enriched += 1
+            if enriched <= 3 or enriched % 20 == 0:
+                print(f"  [{i+1}/{len(tasks)}] enriched: {task.get('name', '')[:40]}")
+        time.sleep(delay)
+    print(f"  Enriched {enriched}/{len(tasks)} tasks")
+    return tasks
 
 
 def load_seen_ids(*filepaths):
@@ -195,11 +291,14 @@ def load_seen_ids(*filepaths):
 # ── SearchRunner ──────────────────────────────────────────────────────────────
 
 class SearchRunner:
-    """Reusable multi-dimensional search with layered filtering.
+    """Unified multi-dimensional search engine.
 
-    Handles the NSFC site's top-100 result limitation by progressively
-    narrowing search scope using sidebar filters (year, category, discipline,
-    institution).
+    Handles the NSFC site's top-100 result limitation by recursively splitting
+    search scope using sidebar filters.
+
+    Usage:
+        runner = SearchRunner(client, seen_ids)
+        projects = runner.run(keyword, [year_opts, category_opts, discipline_opts])
     """
 
     def __init__(self, client, seen_ids, max_pages=10, skip_values=None):
@@ -208,8 +307,9 @@ class SearchRunner:
         self.max_pages = max_pages
         self.skip_values = skip_values or {"近五年"}
 
+    # ── Navigation ──────────────────────────────────────────────────────────
+
     def navigate_and_wait(self, keyword):
-        """Navigate to search results page and wait for Vue SPA to render."""
         kw = urllib.parse.quote(keyword)
         self.client.navigate(f"{NSFC_HOST}/finalSearchList?s={kw}")
         self.client.wait_for_load(timeout=15)
@@ -219,8 +319,10 @@ class SearchRunner:
                 break
             time.sleep(1)
 
+    # ── Single search ────────────────────────────────────────────────────────
+
     def fresh_search(self, keyword, filters, filter_info, full_count=None, retry=True):
-        """Execute a search with optional sidebar filters and collect results."""
+        """Navigate + apply filters + paginate + collect new projects."""
         collected = []
         self.navigate_and_wait(keyword)
         s = get_vue_data(self.client)
@@ -273,37 +375,50 @@ class SearchRunner:
 
         return collected, total
 
-    def split_by_year_category(self, keyword, full_count, year_opts, category_opts):
-        """Split a broad search by year, then by category if needed."""
+    # ── Recursive split ─────────────────────────────────────────────────────
+
+    def run(self, keyword, dim_groups):
+        """Full search: keyword alone, then recursive split by dim_groups.
+
+        dim_groups: list of option lists, one per split level.
+          [year_opts]                    → keyword → year
+          [year_opts, category_opts]     → keyword → year → category
+          [inst_opts, year_opts, kw_opts] → keyword → institution → year → sub-keyword
+        """
+        projects, total = self.fresh_search(keyword, [], f"{keyword}")
+        print(f"  {keyword}: {total} results, collected {len(projects)}")
+        all_new = list(projects)
+
+        if total == 0 or total >= 900:
+            return all_new
+
+        if total > MAX_RESULTS_THRESHOLD and dim_groups:
+            all_new.extend(self._split(keyword, [], dim_groups, total, ""))
+
+        return all_new
+
+    def _split(self, keyword, parent_filters, dim_groups, full_count, prefix):
+        """Recursively split by dimensions, collecting results at each leaf."""
+        if not dim_groups:
+            return []
+
         all_new = []
-        usable_years = [o for o in year_opts
-                       if o.get('label', o.get('value', '')) not in self.skip_values]
+        options = dim_groups[0]
+        usable = [o for o in options
+                  if o.get('label', o.get('value', '')) not in self.skip_values]
 
-        for yr_opt in usable_years:
-            yr_label = yr_opt.get("label", yr_opt.get("value", ""))
-            projects, yr_total = self.fresh_search(
-                keyword, [yr_label], f"{keyword}/{yr_label}", full_count)
-            if projects:
-                print(f"    year={yr_label}: {yr_total} results, collected {len(projects)}")
-            all_new.extend(projects)
-            time.sleep(0.5)
+        for opt in usable:
+            label = opt.get("label", opt.get("value", ""))
+            filters = parent_filters + [label]
+            new_prefix = f"{prefix}/{label}" if prefix else label
+            proj, cnt = self.fresh_search(keyword, filters, f"{keyword}/{new_prefix}", full_count)
+            if proj:
+                print(f"    {new_prefix}: {cnt} results, collected {len(proj)}")
+            all_new.extend(proj)
+            time.sleep(0.3)
 
-            if yr_total == 0 or yr_total >= full_count:
-                continue
-
-            if yr_total > MAX_RESULTS_THRESHOLD:
-                usable_cats = [o for o in category_opts
-                             if o.get('label', o.get('value', '')) not in self.skip_values]
-                if usable_cats:
-                    print(f"      splitting by category ({yr_total} results)...")
-                    for cat_opt in usable_cats:
-                        cat_label = cat_opt.get("label", cat_opt.get("value", ""))
-                        projects, cat_total = self.fresh_search(
-                            keyword, [yr_label, cat_label],
-                            f"{keyword}/{yr_label}/{cat_label}", full_count)
-                        if 0 < cat_total < full_count and projects:
-                            print(f"        category={cat_label}: {cat_total} results, collected {len(projects)}")
-                            all_new.extend(projects)
-                        time.sleep(0.3)
+            if 0 < cnt < full_count and cnt > MAX_RESULTS_THRESHOLD and len(dim_groups) > 1:
+                deeper = self._split(keyword, filters, dim_groups[1:], full_count, new_prefix)
+                all_new.extend(deeper)
 
         return all_new

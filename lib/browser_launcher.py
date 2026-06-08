@@ -9,8 +9,11 @@ import requests
 
 from .config_loader import CHROME_PATH, CDP_PORT, NSFC_HOST
 
+_chrome_process = None
+
 
 def launch_chrome():
+    global _chrome_process
     user_data_dir = os.path.join(tempfile.gettempdir(), "nsfc_chrome_profile")
     os.makedirs(user_data_dir, exist_ok=True)
 
@@ -28,8 +31,24 @@ def launch_chrome():
     ]
 
     print(f"Starting Chrome (CDP port: {CDP_PORT})...")
-    subprocess.Popen(args)
+    _chrome_process = subprocess.Popen(args)
     return user_data_dir
+
+
+def terminate_chrome():
+    """Gracefully terminate the Chrome process we launched."""
+    global _chrome_process
+    if _chrome_process is not None:
+        try:
+            _chrome_process.terminate()
+            _chrome_process.wait(timeout=5)
+        except Exception:
+            try:
+                _chrome_process.kill()
+            except Exception:
+                pass
+        _chrome_process = None
+        print("Chrome terminated.")
 
 
 def wait_for_cdp(timeout=60):

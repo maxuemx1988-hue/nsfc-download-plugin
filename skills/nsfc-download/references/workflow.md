@@ -29,8 +29,7 @@ Run additional scripts with specialized keyword lists:
 - `search-cold.py` - Cold or long-tail keywords that may have been missed
 
 ### Task Lists
-- Results are stored in `task_list2.csv`
-- `task_list.csv` serves as a deduplication source
+- Results are stored in and deduplicated against `task_list.csv`
 - Task status: `pending`, `success`, `failed`, `no_report`
 
 ## Phase 3: Download

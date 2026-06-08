@@ -4,7 +4,6 @@ config.py
 
 # Task tracking data (user-specific research data)
 task_list.csv
-task_list2.csv
 
 # Downloaded reports
 *.pdf

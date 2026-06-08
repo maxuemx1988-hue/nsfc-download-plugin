@@ -31,7 +31,7 @@ Guide new users through these steps in order:
 4. Start Chrome with CDP: `python scripts/start-chrome.py`
 5. User must manually log into NSFC in the opened browser (captcha/biometric required)
 6. Search for projects: `python scripts/search-keyword.py`
-7. (Optional) Run additional search scripts for finer coverage
+7. Enrich metadata: `python scripts/enrich-tasks.py`
 8. Download reports: `python scripts/download.py`
 
 **Important**: Each user needs their own NSFC account. Passwords and accounts are never
@@ -76,9 +76,17 @@ Run any combination of search scripts to build task lists:
 | `search-cold.py` | Cold/long-tail supplemental keywords | `COLD_KEYWORDS` |
 | `search-rerun.py` | Retry after Chrome restart (for degraded state) | `RERUN_KEYWORDS` |
 
-All results merge into `task_list2.csv`, deduplicating against `task_list.csv`.
+All results merge into `task_list.csv`, with automatic deduplication.
 
-### Phase 3: Download Reports
+### Phase 3: Enrich Task Metadata
+```
+python scripts/enrich-tasks.py
+```
+Fetches project details from NSFC API to fill in missing fields:
+申请代码, 项目负责人, 资助经费, 批准年度, 结题年度.
+This step is also automatically performed before download.
+
+### Phase 4: Download Reports
 ```
 python scripts/download.py
 ```
@@ -121,10 +129,11 @@ Guide users through these common issues:
 | `lib/config_loader.py` | Config loading with env var override |
 | `lib/downloader_lib.py` | Shared Vue state extraction, task management |
 | `scripts/download.py` | Main download orchestrator |
+| `scripts/enrich-tasks.py` | Fetch project metadata from API |
 | `scripts/start-chrome.py` | Launch Chrome for CDP |
 | `scripts/search-*.py` | Search scripts (various dimensions) |
 | `templates/config-example.py` | Configuration template |
-| `task_list.csv` / `task_list2.csv` | Task tracking (auto-generated) |
+| `task_list.csv` | Task tracking (auto-generated) |
 
 ## Important Constraints
 

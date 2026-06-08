@@ -15,6 +15,7 @@ def _str(key, default):
         import config
         return getattr(config, key, default)
     except ImportError:
+        print("WARNING: config.py not found. Run: cp templates/config-example.py config.py")
         return default
 
 

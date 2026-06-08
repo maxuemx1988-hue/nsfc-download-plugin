@@ -45,7 +45,10 @@ python scripts/start-chrome.py
 # 4. Search for projects / 搜索项目
 python scripts/search-keyword.py "your keyword"
 
-# 5. Download reports / 下载报告
+# 5. Enrich metadata / 补全项目元数据
+python scripts/enrich-tasks.py
+
+# 6. Download reports / 下载报告
 python scripts/download.py
 ```
 
@@ -79,8 +82,9 @@ All settings can be overridden via `NSFC_*` environment variables / 所有配置
 | `search-institution.py [keyword]` | Institution dimension search / 依托单位维度搜索 |
 | `search-cold.py` | Cold/long-tail keyword supplemental search / 冷门关键词补充搜索 |
 | `search-rerun.py` | Retry search after Chrome restart / Chrome 重启后重试 |
+| `enrich-tasks.py` | Fetch project metadata from API / 从 API 补全项目元数据 |
 
-All search results merge into `task_list2.csv` with status tracking / 所有搜索结果合并到 `task_list2.csv`，含状态追踪。
+All search results merge into `task_list.csv` with status tracking / 所有搜索结果合并到 `task_list.csv`，含状态追踪。
 
 ### Download / 下载
 
