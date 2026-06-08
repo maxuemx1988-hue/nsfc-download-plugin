@@ -86,6 +86,8 @@ All settings can be overridden via `NSFC_*` environment variables / 所有配置
 
 All search results merge into `task_list.csv` with status tracking / 所有搜索结果合并到 `task_list.csv`，含状态追踪。
 
+![NSFC search results page with sidebar filters](assets/nsfc-search.png)
+
 ### Download / 下载
 
 ```bash
