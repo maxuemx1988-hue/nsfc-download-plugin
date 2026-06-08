@@ -92,7 +92,7 @@ def main():
 
     # Enrich
     print(f"\n[3/3] Enriching tasks...")
-    target = tasks if args.force else [t for t in tasks if not t.get("personInCharge")]
+    target = tasks if args.force else [t for t in tasks if not t.get("personInCharge") and not t.get("projectAdmin")]
     print(f"  Targets: {len(target)} tasks need enrichment")
     enrich_tasks(session, target, delay=REQUEST_DELAY)
     save_task_list(tasks, task_file)

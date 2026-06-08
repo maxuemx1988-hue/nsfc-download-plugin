@@ -242,7 +242,7 @@ def main():
     # Enrich task metadata before downloading
     print(f"\n[3/5] Enriching task metadata...")
     pending = [t for t in tasks if t["status"] == "pending"]
-    need_enrich = [t for t in pending if not t.get("personInCharge")]
+    need_enrich = [t for t in pending if not t.get("projectAdmin") and not t.get("personInCharge")]
     if need_enrich:
         print(f"  {len(need_enrich)} tasks need enrichment, fetching from API...")
         for i, task in enumerate(need_enrich):

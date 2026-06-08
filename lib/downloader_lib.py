@@ -203,14 +203,30 @@ def merge_tasks(existing, new_projects):
 
 # ── Task enrichment ───────────────────────────────────────────────────────────
 
-# Known API field name variants for each target field
+# API field name mapping (target → actual API field names)
 _FIELD_MAP = {
-    "applicationCode": ["applicationCode", "applyCode", "grantCode"],
-    "personInCharge": ["personInCharge", "leaderName", "leader", "piName", "personName"],
-    "fundAmount": ["totalAmount", "fundAmount", "approvedAmount", "amount"],
-    "approvalYear": ["approvalYear", "approveYear", "startYear"],
-    "conclusionYear": ["conclusionYear", "endYear", "finishYear", "concludeYear"],
+    "applicationCode": ["code"],
+    "personInCharge": ["projectAdmin"],
+    "fundAmount": ["supportNum"],
+    # approvalYear and conclusionYear are parsed from researchTimeScope below
 }
+
+
+def _extract_year(time_scope, index):
+    """Extract year from researchTimeScope like '2021-01-01...至2024-12-31...'.
+
+    index=0 for first date (批准年度), index=-1 for last date (结题年度).
+    """
+    if not time_scope:
+        return ""
+    import re
+    years = re.findall(r"(\d{4})-\d{2}-\d{2}", str(time_scope))
+    if not years:
+        return ""
+    try:
+        return years[index]
+    except IndexError:
+        return years[0] if years else ""
 
 
 def enrich_task(session, task):
@@ -219,7 +235,9 @@ def enrich_task(session, task):
     Calls conclusionProjectInfo API, extracts: applicationCode, personInCharge,
     fundAmount, approvalYear, conclusionYear. No-op if all fields already filled.
     """
-    fields_needed = [f for f in _FIELD_MAP if not task.get(f)]
+    # Check all target fields including the derived year fields
+    all_targets = list(_FIELD_MAP.keys()) + ["approvalYear", "conclusionYear"]
+    fields_needed = [f for f in all_targets if not task.get(f)]
     if not fields_needed:
         return task  # Already enriched
 
@@ -252,7 +270,14 @@ def enrich_task(session, task):
                 task[target] = str(val)
                 break
 
-    # Also update name from API if the search result name was truncated
+    # Extract years from researchTimeScope (e.g. "2021-01-01...至2024-12-31...")
+    scope = info.get("researchTimeScope", "")
+    if scope and not task.get("approvalYear"):
+        task["approvalYear"] = _extract_year(scope, 0)
+    if scope and not task.get("conclusionYear"):
+        task["conclusionYear"] = _extract_year(scope, -1)
+
+    # Update name from API if search result name was truncated
     api_name = info.get("projectName")
     if api_name and len(api_name) > len(task.get("name", "")):
         task["name"] = api_name
@@ -263,12 +288,13 @@ def enrich_task(session, task):
 def enrich_tasks(session, tasks, delay=1.0):
     """Enrich a list of tasks with API-sourced metadata fields."""
     import time
+    all_fields = list(_FIELD_MAP.keys()) + ["approvalYear", "conclusionYear"]
     enriched = 0
     for i, task in enumerate(tasks):
-        before = {f: task.get(f, "") for f in _FIELD_MAP}
+        before = {f: task.get(f, "") for f in all_fields}
         enrich_task(session, task)
-        after = {f: task.get(f, "") for f in _FIELD_MAP}
-        if any(not before.get(f) and after.get(f) for f in _FIELD_MAP):
+        after = {f: task.get(f, "") for f in all_fields}
+        if any(not before.get(f) and after.get(f) for f in all_fields):
             enriched += 1
             if enriched <= 3 or enriched % 20 == 0:
                 print(f"  [{i+1}/{len(tasks)}] enriched: {task.get('name', '')[:40]}")
